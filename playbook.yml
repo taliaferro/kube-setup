@@ -1,0 +1,23 @@
+- hosts: k3s
+  tags: deps
+  tasks:
+    - pip:
+        name: kubernetes
+
+- hosts: zfs_storage
+  tags: zfs
+  tasks:
+    - kubernetes.core.k8s:
+        kubeconfig: /etc/rancher/k3s/k3s.yaml
+        namespace: default
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: nginx
+          spec:
+            containers:
+              - name: nginx
+                image: nginx:1.14.2
+                ports:
+                  - containerPort: 80

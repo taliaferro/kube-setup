@@ -1,0 +1,8 @@
+[all]
+northstar
+
+[k3s]
+northstar
+
+[zfs_storage]
+northstar data_zpool=re4_2tb
