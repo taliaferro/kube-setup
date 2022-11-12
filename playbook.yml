@@ -1,35 +1,72 @@
 - hosts: k3s
   tags: deps
   tasks:
+    - ansible.builtin.apt:
+        update_cache: yes
+        name: apt-transport-https
+      become: true
+    - ansible.builtin.get_url:
+        url: https://baltocdn.com/helm/signing.asc
+        dest: /usr/share/keyrings/helm.asc
+      become: true
+    - ansible.builtin.apt_repository:
+        repo: deb [arch=amd64 signed-by=/usr/share/keyrings/helm.asc] https://baltocdn.com/helm/stable/debian/ all main
+        state: present
+        filename: helm-stable-debian
+      become: true
+    - ansible.builtin.apt:
+        update_cache: yes
+        name: helm
+      become: true
     - pip:
         name: kubernetes
 
 - hosts: zfs_storage
   tags: zfs
   tasks:
+    - kubernetes.core.helm_repository:
+        name: openebs-zfslocalpv
+        repo_url: https://openebs.github.io/zfs-localpv
+    - kubernetes.core.helm:
+        name: zfs-localpv
+        chart_ref: openebs-zfslocalpv/zfs-localpv
+        release_namespace: openebs
+        kubeconfig: /etc/rancher/k3s/k3s.yaml
+        create_namespace: true
     - community.general.zfs:
-        name: "{{data_zpool}}/{{item.name}}"
+        name: "{{data_zpool}}/openebs"
         state: present
-        extra_zfs_properties: "{{item.props}}"
-      with_items:
-        - name: "csi/pv_snap"
-          props:
-            "com.sun:auto-snapshot": "true"
-        - name: "csi/pv_no_snap"
-          props:
-            "com.sun:auto-snapshot": "false"
       become: true
     - kubernetes.core.k8s:
         kubeconfig: /etc/rancher/k3s/k3s.yaml
-        namespace: default
         definition:
-          apiVersion: v1
-          kind: Pod
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
           metadata:
-            name: nginx
-          spec:
-            containers:
-              - name: nginx
-                image: nginx:1.14.2
-                ports:
-                  - containerPort: 80
+            name: "{{item.name}}"
+            annotations: 
+              storageclass.kubernetes.io/is-default-class: "{{item.default | default('false')}}"
+          parameters:
+            recordsize: "{{'4k' if item.filesystem == 'zfs' else omit}}"
+            volblocksize: "{{'4k' if item.filesystem != 'zfs' else omit}}"
+            compression: "off"
+            dedup: "off"
+            fstype: "zfs"
+            poolname: "{{data_zpool}}/openebs"
+            "com.sun:auto-snapshot": "{{ item.snapshots }}"
+          provisioner: zfs.csi.openebs.io
+      loop:
+        - name: zfs-snap
+          snapshots: "true"
+          filesystem: zfs
+          default: "true"
+        - name: zfs-nosnap
+          snapshots: "false"
+          filesystem: zfs
+        - name: zvol-snap
+          snapshots: "true"
+          filesystem: ext4
+        - name: zvol-nosnap
+          snapshots: "false"
+          filesystem: ext4
+    # May need to remove the default class annotation from whatever the previous default was, if necessary
