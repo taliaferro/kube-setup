@@ -7,6 +7,18 @@
 - hosts: zfs_storage
   tags: zfs
   tasks:
+    - community.general.zfs:
+        name: "{{data_zpool}}/{{item.name}}"
+        state: present
+        extra_zfs_properties: "{{item.props}}"
+      with_items:
+        - name: "csi/pv_snap"
+          props:
+            "com.sun:auto-snapshot": "true"
+        - name: "csi/pv_no_snap"
+          props:
+            "com.sun:auto-snapshot": "false"
+      become: true
     - kubernetes.core.k8s:
         kubeconfig: /etc/rancher/k3s/k3s.yaml
         namespace: default
