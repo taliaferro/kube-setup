@@ -1,0 +1,4 @@
+# so that users can use kubectl
+write-kubeconfig-mode: "0644"
+# so that containerd doesn't freak out about running on ZFS
+snapshotter: native
