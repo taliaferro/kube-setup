@@ -1,0 +1,21 @@
+- kubernetes.core.helm_repository:
+    name: traefik
+    repo_url: https://traefik.github.io/charts
+- name: Install ingress controller
+  kubernetes.core.helm:
+    name: traefik
+    chart_ref: traefik/traefik
+    release_namespace: traefik
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    create_namespace: true
+    values:
+      ingressClass:
+        isDefaultClass: true
+      service:
+        type: LoadBalancer
+      providers:
+        kubernetesCRD:
+          ingressClass: traefik
+      ports:
+        web:
+          redirectTo: websecure

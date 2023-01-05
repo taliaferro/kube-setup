@@ -1,0 +1,19 @@
+- ansible.builtin.apt:
+    update_cache: yes
+    name: apt-transport-https
+  become: true
+- ansible.builtin.get_url:
+    url: https://baltocdn.com/helm/signing.asc
+    dest: /usr/share/keyrings/helm.asc
+  become: true
+- ansible.builtin.apt_repository:
+    repo: deb [arch=amd64 signed-by=/usr/share/keyrings/helm.asc] https://baltocdn.com/helm/stable/debian/ all main
+    state: present
+    filename: helm-stable-debian
+  become: true
+- ansible.builtin.apt:
+    update_cache: yes
+    name: helm
+  become: true
+- pip:
+    name: kubernetes

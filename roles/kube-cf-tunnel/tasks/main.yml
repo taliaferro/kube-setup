@@ -1,0 +1,46 @@
+- name: Create Cloudflare Tunnel token secret
+  when: cf_api_token
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudflare-tunnel-token-secret
+        namespace: traefik
+      type: Opaque
+      stringData:
+        TUNNEL_TOKEN: "{{cf_api_token}}"
+
+- name: Create Cloudflare Tunnel deployment
+  kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        labels:
+          app: cloudflared
+        name: cloudflared
+        namespace: traefik
+      spec:
+        replicas: 2
+        selector:
+          matchLabels:
+            pod: cloudflared
+        template:
+          metadata:
+            creationTimestamp: null
+            labels:
+              pod: cloudflared
+          spec:
+            containers:
+            - command:
+              - cloudflared
+              - tunnel
+              - run
+              image: cloudflare/cloudflared:latest
+              name: cloudflared
+              envFrom:
+              - secretRef:
+                  name: cloudflare-tunnel-token-secret
