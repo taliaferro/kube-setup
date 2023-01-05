@@ -72,6 +72,7 @@
             name: "{{item.name}}"
             annotations: 
               storageclass.kubernetes.io/is-default-class: "{{item.default | default('false')}}"
+          allowVolumeExpansion: true
           parameters:
             recordsize: "{{'4k' if item.filesystem == 'zfs' else omit}}"
             volblocksize: "{{'4k' if item.filesystem != 'zfs' else omit}}"
@@ -153,26 +154,22 @@
         repo_url: https://traefik.github.io/charts
     - name: Install ingress controller
       kubernetes.core.helm:
-        name: "{{item.class_name}}"
+        name: traefik
         chart_ref: traefik/traefik
-        release_namespace: "{{item.class_name}}"
+        release_namespace: traefik
         kubeconfig: /etc/rancher/k3s/k3s.yaml
         create_namespace: true
         values:
           ingressClass:
-            isDefaultClass: "{{item.is_default}}"
+            isDefaultClass: true
           service:
-            type: "{{item.service_type}}"
+            type: LoadBalancer
           providers:
             kubernetesCRD:
-              ingressClass: "{{item.class_name}}"
-      with_items:
-        - class_name: public-traefik
-          service_type: ClusterIP
-          is_default: false
-        - class_name: local-traefik
-          service_type: LoadBalancer
-          is_default: true
+              ingressClass: traefik
+          ports:
+            web:
+              redirectTo: websecure
 
     - name: Create Cloudflare Tunnel token secret
       when: cf_tunnel_token
@@ -183,10 +180,11 @@
           kind: Secret
           metadata:
             name: cloudflare-tunnel-token-secret
-            namespace: public-traefik
+            namespace: traefik
           type: Opaque
           stringData:
             TUNNEL_TOKEN: "{{cf_tunnel_token}}"
+
     - name: Create Cloudflare Tunnel deployment
       kubernetes.core.k8s:
         kubeconfig: /etc/rancher/k3s/k3s.yaml
@@ -197,7 +195,7 @@
             labels:
               app: cloudflared
             name: cloudflared
-            namespace: public-traefik
+            namespace: traefik
           spec:
             replicas: 2
             selector:
@@ -220,3 +218,4 @@
                   - secretRef:
                       name: cloudflare-tunnel-token-secret
 # There's a lot of mucking about with the Cloudflare Zero Trust dashboard after this, but this is all you need on the Kube side.
+
