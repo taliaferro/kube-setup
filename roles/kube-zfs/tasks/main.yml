@@ -1,0 +1,36 @@
+- kubernetes.core.helm_repository:
+    name: openebs-zfslocalpv
+    repo_url: https://openebs.github.io/zfs-localpv
+- kubernetes.core.helm:
+    name: zfs-localpv
+    chart_ref: openebs-zfslocalpv/zfs-localpv
+    release_namespace: openebs
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    create_namespace: true
+- community.general.zfs:
+    name: "{{item.poolname}}"
+    state: present
+    extra_zfs_properties:
+      "com.sun:auto-snapshot": "{{ item.snapshots }}"
+  become: true
+  loop: "{{storage_classes}}"
+- kubernetes.core.k8s:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "{{item.name}}"
+        annotations: 
+          storageclass.kubernetes.io/is-default-class: "{{item.default | default('false')}}"
+      allowVolumeExpansion: true
+      parameters:
+        recordsize: "{{'4k' if item.filesystem == 'zfs' else omit}}"
+        volblocksize: "{{'4k' if item.filesystem != 'zfs' else omit}}"
+        compression: "off"
+        dedup: "off"
+        fstype: "zfs"
+        poolname: "{{item.poolname}}"
+        "com.sun:auto-snapshot": "{{ item.snapshots }}"
+      provisioner: zfs.csi.openebs.io
+  loop: "{{storage_classes}}"

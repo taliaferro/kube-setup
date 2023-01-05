@@ -2,27 +2,9 @@
 
 - name: install dependencies
   hosts: k3s
-  tags: deps
-  tasks:
-    - ansible.builtin.apt:
-        update_cache: yes
-        name: apt-transport-https
-      become: true
-    - ansible.builtin.get_url:
-        url: https://baltocdn.com/helm/signing.asc
-        dest: /usr/share/keyrings/helm.asc
-      become: true
-    - ansible.builtin.apt_repository:
-        repo: deb [arch=amd64 signed-by=/usr/share/keyrings/helm.asc] https://baltocdn.com/helm/stable/debian/ all main
-        state: present
-        filename: helm-stable-debian
-      become: true
-    - ansible.builtin.apt:
-        update_cache: yes
-        name: helm
-      become: true
-    - pip:
-        name: kubernetes
+  tags: kube_common
+  roles:
+    - kube-common
 
 - name: Install OpenEBS ZFS LocalPV provisioner for persistent volume claims
   hosts: zfs_storage
@@ -46,176 +28,19 @@
         snapshots: "false"
         filesystem: ext4
         poolname: "{{data_zpool}}/openebs/nosnap/vol"
-  tasks:
-    - kubernetes.core.helm_repository:
-        name: openebs-zfslocalpv
-        repo_url: https://openebs.github.io/zfs-localpv
-    - kubernetes.core.helm:
-        name: zfs-localpv
-        chart_ref: openebs-zfslocalpv/zfs-localpv
-        release_namespace: openebs
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        create_namespace: true
-    - community.general.zfs:
-        name: "{{item.poolname}}"
-        state: present
-        extra_zfs_properties:
-          "com.sun:auto-snapshot": "{{ item.snapshots }}"
-      become: true
-      loop: "{{storage_classes}}"
-    - kubernetes.core.k8s:
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        definition:
-          apiVersion: storage.k8s.io/v1
-          kind: StorageClass
-          metadata:
-            name: "{{item.name}}"
-            annotations: 
-              storageclass.kubernetes.io/is-default-class: "{{item.default | default('false')}}"
-          allowVolumeExpansion: true
-          parameters:
-            recordsize: "{{'4k' if item.filesystem == 'zfs' else omit}}"
-            volblocksize: "{{'4k' if item.filesystem != 'zfs' else omit}}"
-            compression: "off"
-            dedup: "off"
-            fstype: "zfs"
-            poolname: "{{item.poolname}}"
-            "com.sun:auto-snapshot": "{{ item.snapshots }}"
-          provisioner: zfs.csi.openebs.io
-      loop: "{{storage_classes}}"
-    # May need to remove the default class annotation from whatever the previous default was, if necessary
+  roles:
+    - kube-zfs
 
 
-- name: Create cert-manager issuer
-  hosts: k3s
-  tags: cert
-  vars_prompt:
-    - name: cf_api_token
-      private: true
-      prompt: Cloudflare DNS API token (leave empty to skip)
-  tasks:
-    - kubernetes.core.helm_repository:
-        name: jetstack
-        repo_url: https://charts.jetstack.io
-    - kubernetes.core.helm:
-        name: cert-manager
-        chart_ref: jetstack/cert-manager
-        release_namespace: cert-manager
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        create_namespace: true
-        values:
-          installCRDs: true
-    - name: Create Cloudflare API token secret
-      when: cf_api_token
-      kubernetes.core.k8s:
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: cloudflare-api-token-secret
-            namespace: cert-manager
-          type: Opaque
-          stringData:
-            api-token: "{{cf_api_token}}"
-    - name: Create certificate issuer
-      kubernetes.core.k8s:
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        definition:
-          apiVersion: cert-manager.io/v1
-          kind: ClusterIssuer
-          metadata:
-            name: cf-acme-issuer
-            namespace: cert-manager
-          spec:
-            acme:
-              server: https://acme-v02.api.letsencrypt.org/directory
-              email: me@jamestali.com
-              privateKeySecretRef:
-                name: acme-account-key
-              solvers:
-                - dns01:
-                    cloudflare:
-                      apiTokenSecretRef:
-                        name: cloudflare-api-token-secret
-                        key: api-token
-
-
-- name: Create IngressClasses and Cloudflare Tunnel
+- name: Setup Ingress (with LetsEncrypt certs and Cloudflare Tunnel)
   hosts: k3s
   tags: ingress
   vars_prompt:
-    - name: cf_tunnel_token
+    - name: cf_api_token
       private: true
-      prompt: Cloudflare Tunnel token (leave empty to skip)
-  tasks:
-    - kubernetes.core.helm_repository:
-        name: traefik
-        repo_url: https://traefik.github.io/charts
-    - name: Install ingress controller
-      kubernetes.core.helm:
-        name: traefik
-        chart_ref: traefik/traefik
-        release_namespace: traefik
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        create_namespace: true
-        values:
-          ingressClass:
-            isDefaultClass: true
-          service:
-            type: LoadBalancer
-          providers:
-            kubernetesCRD:
-              ingressClass: traefik
-          ports:
-            web:
-              redirectTo: websecure
-
-    - name: Create Cloudflare Tunnel token secret
-      when: cf_tunnel_token
-      kubernetes.core.k8s:
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: cloudflare-tunnel-token-secret
-            namespace: traefik
-          type: Opaque
-          stringData:
-            TUNNEL_TOKEN: "{{cf_tunnel_token}}"
-
-    - name: Create Cloudflare Tunnel deployment
-      kubernetes.core.k8s:
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        definition:
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            labels:
-              app: cloudflared
-            name: cloudflared
-            namespace: traefik
-          spec:
-            replicas: 2
-            selector:
-              matchLabels:
-                pod: cloudflared
-            template:
-              metadata:
-                creationTimestamp: null
-                labels:
-                  pod: cloudflared
-              spec:
-                containers:
-                - command:
-                  - cloudflared
-                  - tunnel
-                  - run
-                  image: cloudflare/cloudflared:latest
-                  name: cloudflared
-                  envFrom:
-                  - secretRef:
-                      name: cloudflare-tunnel-token-secret
-# There's a lot of mucking about with the Cloudflare Zero Trust dashboard after this, but this is all you need on the Kube side.
-
+      prompt: Cloudflare API token (leave empty to skip)
+  roles:
+    - kube-ingress
+    - kube-acme
+    - kube-cf-tunnel
+  
